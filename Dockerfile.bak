@@ -1,0 +1,172 @@
+# =============================================================================
+# Stage 1: Builder - Compile the Go application
+# =============================================================================
+FROM --platform=$BUILDPLATFORM golang:1.22-bookworm AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create app user for build stage
+ARG TARGETOS
+ARG TARGETARCH
+ARG UID=10001
+ARG GID=10001
+
+# Build arguments for cross-compilation
+ARG BUILD_VERSION=dev
+ARG BUILD_COMMIT=unknown
+ARG BUILD_DATE=unknown
+ARG BUILD_BY=unknown
+
+WORKDIR /build
+
+# Copy go mod files first for dependency caching
+COPY go.mod go.sum* ./
+
+# Download dependencies (cached layer if go.mod/go.sum unchanged)
+RUN --mount=type=cache,target=/root/go/pkg/mod \
+    go mod download
+
+# Copy source code
+COPY . .
+
+# Build the application
+# CGO_ENABLED=0 for static binary (no cgo dependencies)
+# LDFLAGS for version info injection
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+    -ldflags="\
+      -s -w \
+      -X main.Version=${BUILD_VERSION} \
+      -X main.Commit=${BUILD_COMMIT} \
+      -X main.BuiltAt=${BUILD_DATE} \
+      -X main.BuiltBy=${BUILD_BY} \
+    " \
+    -o yourapp \
+    ./cmd/server
+
+# =============================================================================
+# Stage 2: Runtime - Production image with s6-overlay
+# =============================================================================
+FROM debian:stable-slim AS runtime
+
+LABEL org.opencontainers.image.title="yourapp" \
+      org.opencontainers.image.description="Production Go application with s6-overlay" \
+      org.opencontainers.image.source="https://github.com/yourname/yourapp" \
+      org.opencontainers.image.version="latest" \
+      maintainer="Your Name <you@example.com>"
+
+# -----------------------------------------------------------------------------
+# Environment & Metadata
+# -----------------------------------------------------------------------------
+ENV APP_NAME="yourapp" \
+    APP_VERSION="latest" \
+    APP_HOME="/app" \
+    APP_CONFIG="/etc/yourapp" \
+    APP_LOG="/var/log/yourapp" \
+    APP_DATA="/var/lib/yourapp" \
+    # Disable s6 init logging to stderr
+    S6_LOGGING=0 \
+    # Timezone
+    TZ=Asia/Shanghai
+
+# Set shell to UTF-8
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
+# -----------------------------------------------------------------------------
+# Install runtime dependencies & s6-overlay
+# -----------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # CA certificates for HTTPS
+    ca-certificates curl xz-utils \
+    # tzdata for timezone handling
+    tzdata \
+    # s6-overlay for process supervision
+    # Download and install s6-overlay (static version works everywhere)
+    && curl -L https://github.com/just-containers/s6-overlay/releases/download/v3.2.2.0/s6-overlay-noarch.tar.xz \
+        | tar -Jxpf - -C / \
+    && curl -L https://github.com/just-containers/s6-overlay/releases/download/v3.2.2.0/s6-overlay-linux-amd64.tar.xz \
+        | tar -Jxpf - -C / \
+    # Clean up
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Create directory structure
+RUN mkdir -p "${APP_HOME}" \
+             "${APP_CONFIG}" \
+             "${APP_LOG}" \
+             "${APP_DATA}" \
+             /etc/services.d \
+             /etc/cont-init.d \
+             /etc/cont-finish.d
+
+# -----------------------------------------------------------------------------
+# Non-root user setup
+# -----------------------------------------------------------------------------
+# Create dedicated app user (UID/GID 10001)
+ARG UID=10001
+ARG GID=10001
+
+RUN groupadd --gid ${GID} appgroup && \
+    useradd --uid ${UID} --gid ${GID} --shell /bin/false --create-home appuser
+
+# Change ownership of app directories
+RUN chown -R appuser:appgroup "${APP_HOME}" "${APP_LOG}" "${APP_DATA}"
+
+# -----------------------------------------------------------------------------
+# Application artifacts
+# -----------------------------------------------------------------------------
+COPY --from=builder /build/yourapp "${APP_HOME}/"
+COPY --from=builder /build/config.yaml "${APP_CONFIG}/config.yaml"
+
+# Make binary executable
+RUN chmod +x "${APP_HOME}/yourapp"
+
+# -----------------------------------------------------------------------------
+# S6 Overlay Service Definitions
+# -----------------------------------------------------------------------------
+# Run type: longrun (persistent service managed by s6)
+COPY etc/services.d/yourapp/ /etc/services.d/yourapp/
+
+# Make run script executable
+RUN chmod +x /etc/services.d/yourapp/run
+
+# -----------------------------------------------------------------------------
+# Healthcheck
+# -----------------------------------------------------------------------------
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD s6-svstat /var/run/s6/services/yourapp || exit 1
+
+# -----------------------------------------------------------------------------
+# Expose port
+# -----------------------------------------------------------------------------
+EXPOSE 8080
+
+# -----------------------------------------------------------------------------
+# Switch to non-root user
+# -----------------------------------------------------------------------------
+USER appuser
+
+# Working directory
+WORKDIR ${APP_HOME}
+
+# Default command (s6 handles process management)
+CMD ["s6-svscan", "/etc/services.d"]
+
+# =============================================================================
+# Development target (for docker-compose override)
+# =============================================================================
+FROM runtime AS development
+
+# Install development tools
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Keep root for dev, map GID/UID
+USER appuser
+
+CMD ["s6-svscan", "/etc/services.d"]

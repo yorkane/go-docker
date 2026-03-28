@@ -1,0 +1,23 @@
+# =============================================================================
+# Stage 1: Builder - Compile the Go application
+# =============================================================================
+FROM --platform=\ golang:1.22-bookworm AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
+ARG UID=10001
+ARG GID=10001
+
+ARG BUILD_VERSION=dev
+ARG BUILD_COMMIT=unknown
+ARG BUILD_DATE=unknown
+ARG BUILD_BY=unknown
+
+WORKDIR /build
+
+COPY go.mod go.sum* ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=\ GOARCH=\ go build     -ldflags=" -s -w -X main.Version=\ -X main.Commit=\ -X main.BuiltAt=\ -X main.BuiltBy=\

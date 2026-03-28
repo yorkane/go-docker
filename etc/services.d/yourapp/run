@@ -1,0 +1,32 @@
+#!/command/with-contenv bash
+# =============================================================================
+# S6 Overlay Run Script for yourapp
+# =============================================================================
+# s6 automatically handles:
+#   - PID 1 replacement
+#   - Signal forwarding to the managed process
+#   - Zombie reaping
+#   - Log redirection via s6-log
+
+# set -e: Exit on error
+# set -u: Exit on undefined variable
+set -e
+set -u
+
+# Ensure the log directory exists
+mkdir -p /var/log/yourapp
+
+# Export APP_HOME for the run script
+export APP_HOME="/app"
+export APP_CONFIG="/etc/yourapp"
+
+# Log startup
+echo "[$(date -Iseconds)] Starting yourapp with s6-overlay..."
+
+# Run the application with s6-log for log management
+# s6-log: -b (buffered), T (timestamp), n20 (max 20 files), N5 (max 5 rotates)
+exec s6-setuidgid appuser \
+    s6-log -b T n20 N5 /var/log/yourapp \
+    /app/yourapp \
+    --config /etc/yourapp/config.yaml \
+    --log-level info

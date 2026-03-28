@@ -1,0 +1,10 @@
+#!/command/with-contenv bash
+# =============================================================================
+# S6 Overlay Finish Script
+# =============================================================================
+# This script runs after the service exits
+
+# $1 = signal that caused exit (TERM, INT, KILL, etc.)
+# $2 = exit code
+
+echo "[$(date -Iseconds)] yourapp terminated with signal $1, exit code $2"

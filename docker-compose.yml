@@ -1,0 +1,65 @@
+# =============================================================================
+# Docker Compose - Production Deployment
+# Image pulled from registry (built by CI/CD pipeline)
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Production image (from registry)
+  # ---------------------------------------------------------------------------
+  yourapp:
+    image: yourapp:latest
+    container_name: yourapp
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - APP_LOG_LEVEL=info
+      - TZ=Asia/Shanghai
+    volumes:
+      # Mount config for development flexibility
+      - ./config.yaml:/app/config.yaml:ro
+      # Persistent data directory
+      - yourapp_data:/var/lib/yourapp
+      # Log persistence
+      - yourapp_logs:/var/log/yourapp
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - yourapp_network
+
+  # ---------------------------------------------------------------------------
+  # Development service (local build)
+  # ---------------------------------------------------------------------------
+  yourapp-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: yourapp:dev
+    container_name: yourapp-dev
+    profiles:
+      - dev  # Only started with: docker compose --profile dev up
+    ports:
+      - "8080:8080"
+    environment:
+      - APP_LOG_LEVEL=debug
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - yourapp_data:/var/lib/yourapp
+    networks:
+      - yourapp_network
+
+volumes:
+  yourapp_data:
+    driver: local
+  yourapp_logs:
+    driver: local
+
+networks:
+  yourapp_network:
+    driver: bridge
